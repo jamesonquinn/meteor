@@ -215,6 +215,7 @@ var logToClients = function (msg) {
   });
 };
 
+
 ////////// Launch server process //////////
 // Takes options:
 // bundlePath
@@ -227,6 +228,7 @@ var logToClients = function (msg) {
 // [onListen]
 // [nodeOptions]
 // [settings]
+
 
 var startServer = function (options) {
   // environment
@@ -245,11 +247,12 @@ var startServer = function (options) {
     env.METEOR_SETTINGS = options.settings;
   else
     delete env.METEOR_SETTINGS;
+  // Display errors from (eg) the NPM connect module over the network.
+  env.NODE_ENV = 'development';
 
   if (! options.program) {
     var nodeOptions = _.clone(options.nodeOptions);
     nodeOptions.push(path.join(options.bundlePath, 'main.js'));
-    nodeOptions.push('program.json');
     nodeOptions.push('--keepalive');
 
     var child_process = require('child_process');
@@ -288,6 +291,10 @@ var startServer = function (options) {
     packages: ['logging']
   }).logging.Log;
 
+  // Since no other process will be listening to stdout and parsing it,
+  // print directly in the same format as log messages from other apps
+  Log.outputFormat = 'colored-text';
+
   proc.stdout.setEncoding('utf8');
   // The byline module ensures that each 'data' call will receive one
   // line.
@@ -299,17 +306,15 @@ var startServer = function (options) {
       return;
     }
 
-    var obj = Log.parse(line);
-    if (!obj)
-      obj = {message: line, level: "info", time: new Date(), timeInexact: true};
-    logToClients({stdout: Log.format(obj, {color: true}) + '\n'});
+    var obj = Log.parse(line) || Log.objFromText(line);
+    console.log(Log.format(obj, { color:true }));
   });
 
   proc.stderr.setEncoding('utf8');
-  proc.stderr.on('data', function (data) {
-    if (data) {
-      logToClients({stderr: data});
-    }
+  require('byline')(proc.stderr).on('data', function (line) {
+    if (!line) return;
+    var obj = Log.objFromText(line, { level: 'warn', stderr: true });
+    console.log(Log.format(obj, { color: true }));
   });
 
   proc.on('close', function (code, signal) {
@@ -346,7 +351,7 @@ var startServer = function (options) {
 
 var killServer = function (handle) {
   if (handle.proc.pid) {
-    handle.proc.removeAllListeners('exit');
+    handle.proc.removeAllListeners('close');
     handle.proc.kill();
   }
   clearInterval(handle.timer);

@@ -1,3 +1,16 @@
+Tinytest.add("logging - _getCallerDetails", function (test) {
+  var details = Log._getCallerDetails();
+  // Ignore this test for Opera, IE, Safari since this test would work only
+  // in Chrome and Firefox, other browsers don't give us an ability to get
+  // stacktrace.
+  if ((new Error).stack) {
+    //test.equal(details, { file: 'logging_test.js', line: 2 });
+    // XXX: When we have source maps, we should uncomment the test above and
+    // remove this one
+    test.isTrue(details.file === 'logging.tests.js');
+  }
+});
+
 Tinytest.add("logging - log", function (test) {
   var logBothMessageAndObject = function (log, level) {
     Log._intercept(3);
@@ -11,6 +24,13 @@ Tinytest.add("logging - log", function (test) {
     });
     test.throws(function () {
       log({level: 'not the right level'});
+    });
+    _.each(['file', 'line', 'program', 'originApp'], function (restrictedKey) {
+      test.throws(function () {
+        var obj = {};
+        obj[restrictedKey] = 'usage of restricted key';
+        log(obj);
+      });
     });
 
     var intercepted = Log._intercepted();
@@ -44,8 +64,12 @@ Tinytest.add("logging - log", function (test) {
 
 Tinytest.add("logging - parse", function (test) {
   test.equal(Log.parse("message"), null);
-  test.equal(Log.parse('{"foo": "bar"}'), {foo: "bar"});
+  test.equal(Log.parse('{"foo": "bar"}'), null);
+  var time = new Date;
+  test.equal(Log.parse('{"foo": "bar", "time": ' + EJSON.stringify(time) + '}'),
+                        { foo: "bar", time: time });
   test.equal(Log.parse('{"foo": not json "bar"}'), null);
+  test.equal(Log.parse('{"time": "not a date object"}'), null);
 });
 
 Tinytest.add("logging - format", function (test) {
@@ -67,5 +91,30 @@ Tinytest.add("logging - format", function (test) {
       Log.format({message: "message", foo: "bar", time: time, level: level}),
       level.charAt(0).toUpperCase() + '20120908-07:06:05.004 message {"foo":"bar"}');
 
+    // Has everything except stderr field
+    test.equal(
+      Log.format({message: "message", foo: "bar", time: time, level: level, file: "app.js", line:42, app: "myApp", originApp: "proxy", program: "server"}),
+      level.charAt(0).toUpperCase() + '20120908-07:06:05.004 [myApp via proxy] (server:app.js:42) message {\"foo\":\"bar\"}');
+
+    // stderr
+    test.equal(
+      Log.format({message: "message from stderr", time: time, level: level, stderr: true}),
+      level.charAt(0).toUpperCase() + '20120908-07:06:05.004 (STDERR) message from stderr');
+
+    // app/originApp
+    test.equal(
+      Log.format({message: "message", time: time, level: level, app: "app", originApp: "app"}),
+      level.charAt(0).toUpperCase() + '20120908-07:06:05.004 [app] message');
+    test.equal(
+      Log.format({message: "message", time: time, level: level, app: "app", originApp: "proxy"}),
+      level.charAt(0).toUpperCase() + '20120908-07:06:05.004 [app via proxy] message');
+
+    // source info
+    test.equal(
+      Log.format({message: "message", time: time, level: level, file: "app.js", line: 42, program: "server"}),
+      level.charAt(0).toUpperCase() + '20120908-07:06:05.004 (server:app.js:42) message');
+    test.equal(
+      Log.format({message: "message", time: time, level: level, file: "app.js", line: 42}),
+      level.charAt(0).toUpperCase() + '20120908-07:06:05.004 (app.js:42) message');
   });
 });

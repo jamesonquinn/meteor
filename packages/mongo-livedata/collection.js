@@ -221,6 +221,25 @@ _.extend(Meteor.Collection.prototype, {
 
 });
 
+Meteor.Collection._publishCursor = function (cursor, sub, collection) {
+  var observeHandle = cursor.observeChanges({
+    added: function (id, fields) {
+      sub.added(collection, id, fields);
+    },
+    changed: function (id, fields) {
+      sub.changed(collection, id, fields);
+    },
+    removed: function (id) {
+      sub.removed(collection, id);
+    }
+  });
+
+  // We don't call sub.ready() here: it gets called in livedata_server, after
+  // possibly calling _publishCursor on multiple returned cursors.
+
+  // register stop callback (expects lambda w/ no args).
+  sub.onStop(function () {observeHandle.stop();});
+};
 
 // protect against dangerous selectors.  falsey and {_id: falsey} are both
 // likely programmer error, and not what you want, particularly for destructive
@@ -238,8 +257,6 @@ Meteor.Collection._rewriteSelector = function (selector) {
   var ret = {};
   _.each(selector, function (value, key) {
     if (value instanceof RegExp) {
-      // XXX should also do this translation at lower levels (eg if the outer
-      // level is $and/$or/$nor, or if there's an $elemMatch)
       ret[key] = {$regex: value.source};
       var regexOptions = '';
       // JS RegExp objects support 'i', 'm', and 'g'. Mongo regex $options
@@ -250,6 +267,12 @@ Meteor.Collection._rewriteSelector = function (selector) {
         regexOptions += 'm';
       if (regexOptions)
         ret[key].$options = regexOptions;
+    }
+    else if (_.contains(['$or','$and','$nor'], key)) {
+      // Translate lower levels of $and/$or/$nor
+      ret[key] = _.map(value, function (v) {
+        return Meteor.Collection._rewriteSelector(v);
+      });
     }
     else
       ret[key] = value;

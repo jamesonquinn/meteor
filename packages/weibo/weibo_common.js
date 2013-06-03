@@ -1,0 +1,2 @@
+// @export Weibo
+Weibo = {};

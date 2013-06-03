@@ -10,7 +10,7 @@ var getMeteor = function (context) {
   if (! _meteor) {
     _meteor = unipackage.load({
       library: context.library,
-      packages: [ 'livedata' ],
+      packages: [ 'livedata', 'mongo-livedata' ],
       release: context.releaseVersion
     }).meteor.Meteor;
   }
@@ -57,6 +57,20 @@ var prettyCall = function (galaxy, name, args, messages) {
 };
 
 
+var prettySub = function (galaxy, name, args, messages) {
+  var onError = function (e) {
+    exitWithError(e, messages);
+  };
+
+  try {
+    var ret = galaxy._subscribeAndWait(name, args, {onLateError: onError});
+  } catch (e) {
+    onError(e);
+  }
+  return ret;
+};
+
+
 exports.deleteApp = function (app) {
   throw new Error("Not implemented");
 };
@@ -67,6 +81,10 @@ exports.deleteApp = function (app) {
 // - appDir
 // - settings
 // - bundleOptions
+// - starball
+// XXX refactor this to separate the "maybe bundle" part from "actually deploy"
+//     so we can be careful to not rely on any of the app dir context when
+//     in --star mode.
 exports.deploy = function (options) {
   var galaxy = getGalaxy(options.context);
   var Meteor = getMeteor(options.context);
@@ -159,4 +177,49 @@ exports.deploy = function (options) {
                        "pushed revision " + result.serial + "\n");
   // Close the connection to Galaxy (otherwise Node will continue running).
   galaxy.close();
+};
+
+// options:
+// - context
+// - app
+// - streaming (BOOL)
+exports.logs = function (options) {
+  var galaxy = getGalaxy(options.context);
+  var logReaderURL = prettyCall(galaxy, "getLogReaderURL", [], {
+    'no-log-reader': "Can't find log reader service"
+  });
+
+  var logReader = getMeteor().connect(logReaderURL);
+
+  var Log = unipackage.load({
+    library: options.context.library,
+    packages: [ 'logging' ],
+    release: options.context.releaseVersion
+  }).logging.Log;
+
+  var ok = logReader.registerStore('logs', {
+    update: function (msg) {
+      // Ignore all messages but 'changed'
+      if (msg.msg !== 'changed')
+        return;
+      var obj = msg.fields.obj;
+      obj = Log.parse(obj);
+      obj && console.log(Log.format(obj, {color: true}));
+    }
+  });
+
+  if (!ok)
+    throw new Error("Couldn't connect to logs mongodb.");
+
+  prettySub(logReader, "logsForApp", [options.app,
+                                      {streaming: options.streaming}], {
+    "no-such-app": "No such app: " + options.app
+  });
+
+  // if streaming is needed there is no point in closing connection
+  if (!options.streaming) {
+    // Close connections to Galaxy and log-reader (otherwise Node will continue running).
+    galaxy.close();
+    logReader.close();
+  }
 };

@@ -101,8 +101,8 @@ npm install handlebars@1.0.7
 npm install clean-css@0.8.3
 npm install request@2.12.0
 npm install keypress@0.1.0
-npm install http-proxy@0.8.5
-npm install underscore@1.4.2 # 1.4.4 is a performance regression
+npm install http-proxy@0.10.1  # not 0.10.2, which contains a sketchy websocket change
+npm install underscore@1.4.4
 npm install fstream@0.1.21
 npm install tar@0.1.14
 npm install kexec@0.1.1

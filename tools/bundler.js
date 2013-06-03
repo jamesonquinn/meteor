@@ -174,6 +174,7 @@ var fs = require('fs');
 var _ = require('underscore');
 var project = require(path.join(__dirname, 'project.js'));
 var builder = require(path.join(__dirname, 'builder.js'));
+var unipackage = require(path.join(__dirname, 'unipackage.js'));
 
 // files to ignore when bundling. node has no globs, so use regexps
 var ignoreFiles = [
@@ -651,7 +652,7 @@ _.extend(Target.prototype, {
       exclude: exclude
     };
 
-    var walk = function (dir, assetPath) {
+    var walk = function (dir, assetPathPrefix) {
       _.each(fs.readdirSync(dir), function (item) {
         // Skip excluded files
         var matchesAnExclude = _.any(exclude, function (pattern) {
@@ -661,7 +662,7 @@ _.extend(Target.prototype, {
           return;
 
         var absPath = path.resolve(dir, item);
-        assetPath = path.join(dir, item);
+        var assetPath = path.join(assetPathPrefix, item);
         if (fs.statSync(absPath).isDirectory()) {
           walk(absPath, assetPath);
           return;
@@ -671,11 +672,7 @@ _.extend(Target.prototype, {
         if (options.setUrl)
           f.setUrlFromRelPath(assetPath);
         if (options.setTargetPath)
-          f.setTargetPathFromRelPath(path.join(path.sep,
-                                               'static',
-                                               path.relative(rootDir,
-                                                             assetPath)));
-
+          f.setTargetPathFromRelPath(assetPath);
         self.dependencyInfo.files[absPath] = f.hash();
         self.static.push(f);
       });
@@ -1060,6 +1057,7 @@ var ServerTarget = function (options) {
 
   self.clientTarget = options.clientTarget;
   self.releaseStamp = options.releaseStamp;
+  self.library = options.library;
 
   if (! archinfo.matches(self.arch, "native"))
     throw new Error("ServerTarget targeting something that isn't a server?");
@@ -1135,11 +1133,15 @@ _.extend(ServerTarget.prototype, {
         path.join(files.get_dev_bundle(), '.bundle_version.txt'), 'utf8');
     devBundleVersion = devBundleVersion.split('\n')[0];
 
-    var script = fs.readFileSync(path.join(__dirname, 'server',
-                                           'target.sh.in'), 'utf8');
+    var shellScripts = unipackage.load({
+      library: self.library,
+      packages: ['dev-bundle-fetcher']
+    })['dev-bundle-fetcher'].shellScripts;
+    var script = shellScripts['dev-bundle.sh.in'].source;
     script = script.replace(/##PLATFORM##/g, platform);
     script = script.replace(/##BUNDLE_VERSION##/g, devBundleVersion);
     script = script.replace(/##IMAGE##/g, imageControlFile);
+    script = script.replace(/##RUN_FILE##/g, 'boot.js');
     builder.write(scriptName, { data: new Buffer(script, 'utf8'),
                                 executable: true });
 
@@ -1264,7 +1266,8 @@ var writeSiteArchive = function (targets, outputPath, options) {
 
     // Affordances for standalone use
     if (targets.server) {
-      var stub = new Buffer("require('./programs/server/boot.js');\n", 'utf8');
+      // add program.json as the first argument after "node main.js" to the boot script.
+      var stub = new Buffer("process.argv.splice(2, 0, 'program.json');\nrequire('./programs/server/boot.js');\n", 'utf8');
       builder.write('main.js', { data: stub });
 
       builder.write('README', { data: new Buffer(

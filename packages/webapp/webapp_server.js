@@ -1,12 +1,12 @@
 ////////// Requires //////////
 
 var fs = Npm.require("fs");
+var http = Npm.require("http");
 var os = Npm.require("os");
 var path = Npm.require("path");
 var url = Npm.require("url");
 
 var connect = Npm.require('connect');
-var gzippo = Npm.require('gzippo');
 var optimist = Npm.require('optimist');
 var useragent = Npm.require('useragent');
 
@@ -129,6 +129,11 @@ var appUrl = function (url) {
   return true;
 };
 
+
+Meteor._postStartup = function (callback) {
+  __meteor_bootstrap__.postStartupHooks.push(callback);
+};
+
 var runWebAppServer = function () {
   // read the control for the client we'll be serving up
   var clientJsonPath = path.join(__meteor_bootstrap__.serverDir,
@@ -162,7 +167,7 @@ var runWebAppServer = function () {
   }
 
   // webserver
-  var app = connect.createServer();
+  var app = connect();
   // Parse the query string into res.query. Only oauth_server cares about this,
   // but it's overkill to have that package depend on its own copy of connect
   // just for this simple processing.
@@ -172,17 +177,17 @@ var runWebAppServer = function () {
   // have test-only NPM dependencies but is overkill here.)
   app.__basicAuth__ = connect.basicAuth;
 
+  // Auto-compress any json, javascript, or text.
+  app.use(connect.compress());
+
   var staticCacheablePath = path.join(clientDir, clientJson.staticCacheable);
-  if (staticCacheablePath)
+  if (staticCacheablePath) {
     // cacheable files are files that should never change. Typically
     // named by their hash (eg meteor bundled js and css files).
     // cache them ~forever (1yr)
-    //
-    // 'root' option is to work around an issue in connect/gzippo.
-    // See https://github.com/meteor/meteor/pull/852
-    app.use(gzippo.staticGzip(staticCacheablePath,
-                              {clientMaxAge: 1000 * 60 * 60 * 24 * 365,
-                               root: '/'}));
+    app.use(connect.static(staticCacheablePath,
+                           {maxAge: 1000 * 60 * 60 * 24 * 365}));
+  }
 
   // cache non-cacheable file anyway. This isn't really correct, as
   // users can change the files and changes won't propogate
@@ -193,14 +198,16 @@ var runWebAppServer = function () {
   // allow users to change assets without delay.
   // https://github.com/meteor/meteor/issues/773
   var staticPath = path.join(clientDir, clientJson.static);
-  if (staticPath)
-    app.use(gzippo.staticGzip(staticPath,
-                              {clientMaxAge: 1000 * 60 * 60 * 24,
-                               root: '/'}));
+  if (staticPath) {
+    app.use(connect.static(staticPath, {maxAge: 1000 * 60 * 60 * 24}));
+  }
+
+  var httpServer = http.createServer(app);
 
   // start up app
   _.extend(__meteor_bootstrap__, {
     app: app,
+    httpServer: httpServer,
     // metadata about this bundle
     // XXX this could use some refactoring to better distinguish
     // server and client
@@ -255,13 +262,16 @@ var runWebAppServer = function () {
 
     // only start listening after all the startup code has run.
     var bind = deployConfig.boot.bind;
-    app.listen(bind.localPort || 0, Meteor.bindEnvironment(function() {
+    httpServer.listen(bind.localPort || 0, Meteor.bindEnvironment(function() {
       if (argv.keepalive)
         console.log("LISTENING"); // must match run.js
-      var port = app.address().port;
+      var port = httpServer.address().port;
       if (bind.viaProxy) {
         bindToProxy(bind.viaProxy);
       }
+
+      _.each(__meteor_bootstrap__.postStartupHooks, function (x) { x(); });
+
     }, function (e) {
       console.error("Error listening:", e);
       console.error(e.stack);
@@ -282,13 +292,16 @@ var bindToProxy = function (proxyConfig) {
   // XXX move these into deployConfig?
   if (!process.env.GALAXY_JOB)
     throw new Error("missing $GALAXY_JOB");
+  if (!process.env.GALAXY_APP)
+    throw new Error("missing $GALAXY_APP");
   if (!process.env.LAST_START)
     throw new Error("missing $LAST_START");
 
   // XXX rename pid argument to bindTo.
   var pid = {
     job: process.env.GALAXY_JOB,
-    lastStarted: process.env.LAST_START
+    lastStarted: process.env.LAST_START,
+    app: process.env.GALAXY_APP
   };
   var myHost = os.hostname();
 

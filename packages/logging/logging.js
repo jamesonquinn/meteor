@@ -3,6 +3,7 @@ Log = function () {
   return Log.info.apply(this, arguments);
 };
 
+/// FOR TESTING
 var intercept = 0;
 var interceptedLines = [];
 
@@ -18,17 +19,33 @@ Log._intercepted = function () {
   return lines;
 };
 
+// Either 'json' or 'colored-text'.
+//
+// When this is set to 'json', print JSON documents that are parsed by another
+// process ('satellite' or 'meteor run'). This other process should call
+// 'Log.format' for nice output.
+//
+// When this is set to 'colored-text', call 'Log.format' before printing.
+// This should be used for logging from within satellite, since there is no
+// other process that will be reading its standard output.
+Log.outputFormat = 'json';
+
 var LEVEL_COLORS = {
-  debug: 'blue',
-  info: 'cyan',
+  debug: 'green',
+  info: 'blue',
   warn: 'yellow',
   error: 'red'
 };
 
-// XXX file, line, package
-var RESTRICTED_KEYS = ['time', 'timeInexact', 'level'];
+var META_COLOR = 'magenta';
 
-var logOnClient = function (obj) {
+// XXX package
+var RESTRICTED_KEYS = ['time', 'timeInexact', 'level', 'file', 'line',
+                        'program', 'originApp', 'stderr'];
+
+var FORMATTED_KEYS = RESTRICTED_KEYS.concat(['app', 'message']);
+
+var logInBrowser = function (obj) {
   var str = Log.format(obj);
 
   // XXX Some levels should be probably be sent to the server
@@ -44,6 +61,53 @@ var logOnClient = function (obj) {
   }
 };
 
+// @returns {Object: { line: Number, file: String }}
+Log._getCallerDetails = function () {
+  var getStack = function () {
+    var orig = Error.prepareStackTrace;
+    Error.prepareStackTrace = function(_, stack){ return stack; };
+    var err = new Error;
+    if (_.isFunction(Error.captureStackTrace))
+      Error.captureStackTrace(err, arguments.callee);
+    var stack = err.stack;
+    Error.prepareStackTrace = orig;
+    return stack;
+  };
+
+  var stack = getStack();
+
+  if (!stack) return {};
+
+  var isV8 = false;
+  var lines = stack;
+  // check for V8 specifics
+  if (_.isArray(stack))
+    isV8 = true;
+  else
+    lines = stack.split('\n');
+  var index = 1;
+  var line = lines[index];
+
+  // looking for the first line outside the logging package
+  while ((isV8?line.getFileName():line).indexOf('/packages/logging.js') !== -1)
+    line = lines[++index];
+
+  var details = {};
+
+  // The format for FF is functionName@filePath:lineNumber
+  // For V8 call built-in function
+  details.line = isV8 ? line.getLineNumber() : line.split(':').slice(-1)[0];
+
+  // Possible format: https://foo.bar.com/scripts/file.js?random=foobar
+  // For FF we parse the line, for V8 we call built-in function
+  // XXX: if you can write the following in better way, please do it
+  details.file = isV8 ? line.getFileName()
+                      : line.split('@')[1].split(':').slice(0, -1).join(':');
+  details.file = details.file.split('/').slice(-1)[0].split('?')[0];
+
+  return details;
+};
+
 _.each(['debug', 'info', 'warn', 'error'], function (level) {
   // @param arg {String|Object}
   Log[level] = function (arg) {
@@ -53,16 +117,16 @@ _.each(['debug', 'info', 'warn', 'error'], function (level) {
       intercepted = true;
     }
 
-    var obj = (typeof arg === 'string') ? {message: arg} : arg;
+    var obj = (typeof arg === 'string') ? {message: arg}: arg;
 
     _.each(RESTRICTED_KEYS, function (key) {
       if (obj[key])
         throw new Error("Can't set '" + key + "' in log message");
     });
 
+    obj = _.extend(Log._getCallerDetails(), obj);
     obj.time = new Date();
     obj.level = level;
-    // XXX file, line, package
 
     // XXX allow you to enable 'debug', probably per-package
     if (level === 'debug')
@@ -71,9 +135,15 @@ _.each(['debug', 'info', 'warn', 'error'], function (level) {
     if (intercepted) {
       interceptedLines.push(EJSON.stringify(obj));
     } else if (Meteor.isServer) {
-      console.log(EJSON.stringify(obj));
+      if (Log.outputFormat === 'colored-text') {
+        console.log(Log.format(obj, {color: true}));
+      } else if (Log.outputFormat === 'json') {
+        console.log(EJSON.stringify(obj));
+      } else {
+        throw new Error("Unknown logging output format: " + Log.outputFormat);
+      }
     } else {
-      logOnClient(obj);
+      logInBrowser(obj);
     }
   };
 });
@@ -81,10 +151,15 @@ _.each(['debug', 'info', 'warn', 'error'], function (level) {
 // tries to parse line as EJSON. returns object if parse is successful, or null if not
 Log.parse = function (line) {
   var obj = null;
-  if (line && line[0] === '{') { // might be json generated from calling 'Log'
+  if (line && line.charAt(0) === '{') { // might be json generated from calling 'Log'
     try { obj = EJSON.parse(line); } catch (e) {}
   }
-  return obj;
+
+  // XXX should probably check fields other than 'time'
+  if (obj && obj.time && (obj.time instanceof Date))
+    return obj;
+  else
+    return null;
 };
 
 // formats a log object into colored human and machine-readable text
@@ -97,14 +172,20 @@ Log.format = function (obj, options) {
     throw new Error("'time' must be a Date object");
   var timeInexact = obj.timeInexact;
 
+  // store fields that are in FORMATTED_KEYS since we strip them
   var level = obj.level || 'info';
+  var file = obj.file;
+  var lineNumber = obj.line;
+  var appName = obj.app || '';
+  var originApp = obj.originApp;
+  var message = obj.message || '';
+  var program = obj.program || '';
+  var stderr = obj.stderr || '';
 
-  _.each(RESTRICTED_KEYS, function(key) {
+  _.each(FORMATTED_KEYS, function(key) {
     delete obj[key];
   });
 
-  var message = obj.message || '';
-  delete obj.message;
   if (!_.isEmpty(obj)) {
     if (message) message += " ";
     message += EJSON.stringify(obj);
@@ -124,19 +205,40 @@ Log.format = function (obj, options) {
         '.' +
         pad3(time.getMilliseconds());
 
-  var line = [
+  var appInfo = '';
+  if (appName) appInfo += appName;
+  if (originApp && originApp !== appName) appInfo += ' via ' + originApp;
+  if (appInfo) appInfo = '[' + appInfo + '] ';
+
+  var sourceInfo = (file && lineNumber) ?
+      ['(', (program ? program + ':' : ''), file, ':', lineNumber, ') '].join('')
+      : '';
+
+  var stderrIndicator = stderr ? '(STDERR) ' : '';
+
+  var metaPrefix = [
     level.charAt(0).toUpperCase(),
     dateStamp,
     '-',
     timeStamp,
     timeInexact ? '?' : ' ',
-    message].join('');
+    appInfo,
+    sourceInfo,
+    stderrIndicator].join('');
 
-  if (options.color && Meteor.isServer) {
-    var color = LEVEL_COLORS[level];
-    if (color)
-      line = Npm.require('cli-color')[color](line);
-  }
+  var prettify = function (line, color) {
+    return (options.color && Meteor.isServer && color) ?
+      Npm.require('cli-color')[color](line) : line;
+  };
 
-  return line;
+  return prettify(metaPrefix, META_COLOR)
+    + prettify(message, LEVEL_COLORS[level]);
+};
+
+// Turn a line of text into a loggable object.
+// @param line {String}
+// @param override {Object}
+Log.objFromText = function (line, override) {
+  var obj = {message: line, level: "info", time: new Date(), timeInexact: true};
+  return _.extend(obj, override);
 };

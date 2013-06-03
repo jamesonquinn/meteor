@@ -608,7 +608,7 @@ Fiber(function () {
     name: "bundle",
     help: "Pack this project up into a tarball",
     func: function (argv) {
-      if (argv.help || argv._.length != 1) {
+      var usage = function () {
         process.stdout.write(
           "Usage: meteor bundle <output_file.tar.gz>\n" +
             "\n" +
@@ -616,7 +616,18 @@ Fiber(function () {
             "includes everything necessary to run the application. See README in\n" +
             "the tarball for details.\n");
         process.exit(1);
-      }
+      };
+      if (argv.help)
+        usage();
+
+      // re-parse the args to this command
+      // XXX clean up this whole file :)
+      argv = require("optimist")
+        .boolean('for-deploy').argv;
+      argv._.shift();  // pull off the word "bundle"
+
+      if (argv._.length != 1)
+        usage();
 
       // XXX if they pass a file that doesn't end in .tar.gz or .tgz,
       // add the former for them
@@ -635,7 +646,7 @@ Fiber(function () {
 
       var bundler = require(path.join(__dirname, 'bundler.js'));
       var bundleResult = bundler.bundle(context.appDir, bundle_path, {
-        nodeModulesMode: 'copy',
+        nodeModulesMode: argv['for-deploy'] ? 'skip' : 'copy',
         minify: true,  // XXX allow --debug
         releaseStamp: context.releaseVersion,
         library: context.library
@@ -785,7 +796,9 @@ Fiber(function () {
           deploy.delete_app(site);
       } else {
         var starball = new_argv.star;
-        requireDirInApp("deploy");
+        // We don't need to be in an app if we're not going to run the bundler.
+        if (!starball)
+          requireDirInApp("deploy");
         var settings = undefined;
         if (new_argv.settings)
           settings = runner.getSettings(new_argv.settings);
@@ -831,15 +844,31 @@ Fiber(function () {
     name: "logs",
     help: "Show logs for specified site",
     func: function (argv) {
-      if (argv.help || argv._.length < 1 || argv._.length > 2) {
+      argv = require('optimist').boolean('f').argv;
+
+      if (argv.help || argv._.length !== 2) {
         process.stdout.write(
-          "Usage: meteor logs <site>\n" +
+          "Usage: meteor logs [-f] <site>\n" +
             "\n" +
-            "Retrieves the server logs for the requested site.\n");
+            "Retrieves the server logs for the requested site.\n" +
+            "\n" +
+            "-f\t\tThe -f option causes to not stop when end of logs is " +
+            "reached but rather to wait for additional logs to be appended.\n");
         process.exit(1);
       }
 
-      deploy.logs(argv._[0]);
+      var useGalaxy = 'GALAXY' in process.env;
+
+      if (useGalaxy) {
+        var deployGalaxy = require('./deploy-galaxy.js');
+        deployGalaxy.logs({
+          context: context,
+          app: argv._[1],
+          streaming: !!argv.f
+        });
+      } else {
+        deploy.logs(argv._[1]);
+      }
     }
   });
 
