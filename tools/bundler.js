@@ -684,7 +684,7 @@ _.extend(Target.prototype, {
         if (options.setUrl)
           f.setUrlFromRelPath(assetPath);
         if (options.setTargetPath)
-          f.setTargetPathFromRelPath(assetPath);
+          f.setTargetPathFromRelPath(path.join('/static', assetPath));
         self.dependencyInfo.files[absPath] = f.hash();
         self.static.push(f);
       });
