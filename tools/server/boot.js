@@ -70,15 +70,21 @@ Fiber(function () {
     };
     var staticDir = path.join(__dirname, fileInfo.staticDir);
     var getAsset = function (assetPath, encoding, callback) {
-      var fut = new Future();
-      var readCb = callback || fut.resolver();
-      fs.readFile(path.join(staticDir, assetPath), encoding,
-                  readCb);
+      var fut;
       if (! callback) {
-        var contents = fut.wait();
-        return contents;
+        fut = new Future();
+        callback = fut.resolver();
+      } else {
+        callback = Meteor.bindEnvironment(callback, function (e) {
+          Meteor._debug("Exception in callback of getAsset", e.stack);
+        });
       }
+      fs.readFile(path.join(staticDir, assetPath), encoding,
+                  callback);
+      if (fut)
+        return fut.wait();
     };
+
     var Assets = {
       getText: function (assetPath, callback) {
         return getAsset(assetPath, "utf8", callback);
