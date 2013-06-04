@@ -69,20 +69,45 @@ Fiber(function () {
       }
     };
     var staticDir = path.join(__dirname, fileInfo.staticDir);
+    var convertAssetResult = function (data) {
+      // XXX this is duplicated from EJSON
+      // I'm not sure how to avoid this while still giving each package its own
+      // namespaced version of Assets.
+      var ret;
+      if (typeof Uint8Array === 'undefined') {
+        ret = [];
+        for (var i = 0; i < data.length; i++) {
+          ret.push(data[i]);
+        }
+        ret.$Uint8ArrayPolyfill = true;
+      } else {
+        // XXX still trying to figure out if this copies
+        ret = new Uint8Array(data);
+      }
+      return ret;
+    };
     var getAsset = function (assetPath, encoding, callback) {
+      var _callback;
       var fut;
       if (! callback) {
         fut = new Future();
-        callback = fut.resolver();
+        _callback = fut.resolver();
       } else {
-        callback = Meteor.bindEnvironment(callback, function (e) {
+        _callback = function (err, result) {
+          if (result && ! encoding)
+            result = convertAssetResult(result);
+          callback(err, result);
+        };
+        _callback = Meteor.bindEnvironment(_callback, function (e) {
           Meteor._debug("Exception in callback of getAsset", e.stack);
         });
       }
       fs.readFile(path.join(staticDir, assetPath), encoding,
-                  callback);
-      if (fut)
-        return fut.wait();
+                  _callback);
+      if (fut) {
+        var result = fut.wait();
+        return (encoding ? result : convertAssetResult(result));
+      }
     };
 
     var Assets = {
