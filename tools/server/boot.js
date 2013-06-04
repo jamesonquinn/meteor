@@ -69,23 +69,6 @@ Fiber(function () {
       }
     };
     var staticDir = path.join(__dirname, fileInfo.staticDir);
-    var convertAssetResult = function (data) {
-      // XXX this is duplicated from EJSON
-      // I'm not sure how to avoid this while still giving each package its own
-      // namespaced version of Assets.
-      var ret;
-      if (typeof Uint8Array === 'undefined') {
-        ret = [];
-        for (var i = 0; i < data.length; i++) {
-          ret.push(data[i]);
-        }
-        ret.$Uint8ArrayPolyfill = true;
-      } else {
-        // XXX still trying to figure out if this copies
-        ret = new Uint8Array(data);
-      }
-      return ret;
-    };
     var getAsset = function (assetPath, encoding, callback) {
       var _callback;
       var fut;
@@ -95,7 +78,7 @@ Fiber(function () {
       } else {
         _callback = function (err, result) {
           if (result && ! encoding)
-            result = convertAssetResult(result);
+            result = new Uint8Array(result);
           callback(err, result);
         };
         _callback = Meteor.bindEnvironment(_callback, function (e) {
@@ -106,7 +89,7 @@ Fiber(function () {
                   _callback);
       if (fut) {
         var result = fut.wait();
-        return (encoding ? result : convertAssetResult(result));
+        return (encoding ? result : new Uint8Array(result));
       }
     };
 
